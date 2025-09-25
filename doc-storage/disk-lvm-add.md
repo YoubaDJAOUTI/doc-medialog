@@ -1,6 +1,7 @@
 
+---
 
-# 📘 Documentation : Configuration LVM et migration MariaDB vers `/data`
+# 📘 ** Configuration LVM et migration MariaDB vers `/data`
 
 ## 1. Préparation du disque et création du LVM
 
@@ -14,143 +15,172 @@
 2. Créer une partition LVM sur le disque `/dev/vdb` :
 
    ```bash
-   /sbin/fdisk /dev/vdb
+   fdisk /dev/vdb
    ```
 
-   * `n` → nouvelle partition primaire
+   * `n` → nouvelle partition
    * `p` → partition primaire
-   * Enter pour taille complète
-   * `t` → changer le type en `8e` (Linux LVM)
+   * Enter → utiliser tout le disque
+   * `t` → type `8e` (Linux LVM)
    * `w` → écrire et quitter
 
-3. Initialiser la partition comme **Physical Volume (PV)** :
+3. Initialiser le PV :
 
    ```bash
    pvcreate /dev/vdb1
    ```
 
-4. Créer un **Volume Group (VG)** appelé `data` :
+4. Créer le VG :
 
    ```bash
    vgcreate data /dev/vdb1
    ```
 
-5. Créer un **Logical Volume (LV)** prenant tout l’espace :
+5. Créer le LV :
 
    ```bash
    lvcreate -n data -l +100%FREE data
    ```
 
-6. Vérifier la création :
+6. Vérifier :
 
    ```bash
    lvs
    ```
 
-7. Formater le LV en ext4 :
+7. Formater en ext4 :
 
    ```bash
    mkfs.ext4 /dev/data/data
    ```
 
-8. Monter le LV sur `/data` :
+8. Créer le point de montage :
 
    ```bash
    mkdir /data
-   mount -a
    ```
 
-9. Ajouter au fichier `/etc/fstab` pour un montage automatique :
+9. Monter temporairement pour tester :
 
-   ```fstab
-   /dev/data/data   /data   ext4   defaults   0   2
+   ```bash
+   mount /dev/data/data /data
    ```
+
+10. Vérifier :
+
+```bash
+df -h | grep /data
+```
+
+11. Ajouter dans `/etc/fstab` :
+
+```fstab
+/dev/mapper/data-data   /data   ext4   defaults   0   2
+```
+
+12. Tester avant reboot :
+
+```bash
+umount /data
+mount -a
+df -h | grep /data
+```
 
 ---
 
 ## 2. Migration de MariaDB vers `/data`
 
-1. Arrêter le service :
+1. Stopper MariaDB :
 
    ```bash
-   service mysql stop
+   systemctl stop mysql
    ```
 
-2. Déplacer le répertoire MySQL :
+2. Sauvegarder au cas où :
 
    ```bash
-   cd /var/lib/
-   mv mysql /data/
-   ln -s /data/mysql mysql
+   cp -a /var/lib/mysql /root/mysql_backup
    ```
 
-3. Vérifier :
+3. Déplacer le répertoire :
 
    ```bash
-   ls -l /var/lib/
+   mv /var/lib/mysql /data/
    ```
 
-4. Redémarrer le service :
+4. Créer le symlink :
 
    ```bash
-   service mysql start
+   ln -s /data/mysql /var/lib/mysql
+   ```
+
+5. Vérifier :
+
+   ```bash
+   ls -l /var/lib/ | grep mysql
+   ```
+
+6. Vérifier les permissions :
+
+   ```bash
+   chown -R mysql:mysql /data/mysql
    ```
 
 ---
 
 ## 3. Configuration d’un répertoire temporaire dédié
 
-1. Créer un dossier temporaire :
+1. Créer le répertoire :
 
    ```bash
-   cd /data
-   mkdir tmp
-   chown mysql:mysql tmp
-   chmod 775 tmp
+   mkdir /data/tmp
+   chown mysql:mysql /data/tmp
+   chmod 775 /data/tmp
    ```
 
-2. Modifier la configuration MariaDB (`/etc/mysql/mariadb.conf.d/50-server.cnf`) :
-   Dans la section `[mysqld]`, ajouter :
+2. Modifier la conf :
+
+   ```bash
+   nano /etc/mysql/mariadb.conf.d/50-server.cnf
+   ```
+
+   Dans `[mysqld]`, ajouter :
 
    ```ini
    tmpdir = /data/tmp
    ```
 
-3. Redémarrer MariaDB :
-
-   ```bash
-   service mysql restart
-   ```
-
 ---
 
-## 4. Vérifications
+## 4. Redémarrage et tests
 
-1. Vérifier l’espace disque :
+1. Redémarrer MariaDB :
 
    ```bash
-   df -h
+   systemctl start mysql
+   systemctl status mysql
    ```
 
-2. Vérifier que MySQL utilise le bon `datadir` :
+2. Vérifier que MariaDB utilise bien `/data` :
 
    ```bash
    mysql -e "SHOW VARIABLES LIKE 'datadir';"
+   mysql -e "SHOW VARIABLES LIKE 'tmpdir';"
    ```
 
-3. Vérifier que le `tmpdir` est bien `/data/tmp` :
+3. Vérifier l’espace disque :
 
    ```bash
-   mysql -e "SHOW VARIABLES LIKE 'tmpdir';"
+   df -h
    ```
 
 ---
 
 ## ✅ Résultat attendu
 
-* `/data` est monté sur le disque LVM de 400 Go
-* `datadir` de MariaDB est déplacé vers `/data/mysql`
-* Les fichiers temporaires de MariaDB sont écrits dans `/data/tmp`
-* Le disque système (32 Go) reste disponible pour l’OS uniquement
+* Le LV `/dev/mapper/data-data` est monté automatiquement sur `/data`
+* `datadir` de MariaDB → `/data/mysql`
+* `tmpdir` de MariaDB → `/data/tmp`
+* Le disque système reste léger et MariaDB utilise bien le gros disque
 
 ---
